@@ -1,0 +1,22 @@
+[package]
+name = "feather-client"
+version = "0.1.0"
+description = "A lightweight cross-platform Minecraft Java launcher MVP"
+authors = ["Sykii Playz"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.88.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "feather_client_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3" }
+
+[dependencies]
+serde_json = "=1.0.150"
+serde = { version = "=1.0.228", features = ["derive"] }
+tauri = { version = "=2.11.4" }
