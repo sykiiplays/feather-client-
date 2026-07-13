@@ -936,6 +936,11 @@ button {
   line-height: 16px;
 }
 
+.heading-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .profile-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1482,6 +1487,10 @@ button {
   animation: modal-in 160ms ease-out;
 }
 
+.modal:has(.modrinth-browser) {
+  width: min(700px, 100%);
+}
+
 @keyframes modal-in {
   from {
     opacity: 0;
@@ -1597,6 +1606,82 @@ button {
   width: 100%;
   height: 39px;
   padding: 0 11px;
+}
+
+.profile-form label > small {
+  color: var(--muted-2);
+  font-size: 7px;
+  font-weight: 500;
+}
+
+.modrinth-browser {
+  padding: 18px;
+}
+
+.modrinth-search {
+  display: flex;
+  gap: 8px;
+}
+
+.modrinth-results {
+  display: grid;
+  max-height: 430px;
+  margin-top: 12px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.modrinth-result {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modrinth-result:last-child {
+  border-bottom: 0;
+}
+
+.modrinth-result img,
+.modrinth-placeholder {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--surface-2);
+  object-fit: cover;
+}
+
+.modrinth-result > div {
+  min-width: 0;
+}
+
+.modrinth-result strong {
+  font-size: 10px;
+}
+
+.modrinth-result p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 4px 0;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 12px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.modrinth-result small {
+  color: var(--muted-2);
+  font-size: 7px;
+}
+
+.empty-state.compact {
+  min-height: 190px;
 }
 
 .preflight-status {
@@ -1930,6 +2015,24 @@ button {
 
   .page-heading .primary {
     width: 100%;
+  }
+
+  .heading-actions,
+  .modrinth-search {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .heading-actions button {
+    width: 100%;
+  }
+
+  .modrinth-result {
+    grid-template-columns: 38px minmax(0, 1fr);
+  }
+
+  .modrinth-result button {
+    grid-column: 1 / -1;
   }
 
   .mod-row {

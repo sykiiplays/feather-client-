@@ -1,14 +1,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256, Sha512};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     env, fs,
+    fs::File,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
 use tauri::{AppHandle, Manager};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct JavaRuntime {
     path: String,
@@ -31,6 +35,69 @@ struct LocalModFile {
     name: String,
     path: String,
     size_kb: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MinecraftVersion {
+    id: String,
+    #[serde(rename = "type")]
+    version_type: String,
+    release_time: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MinecraftVersionManifest {
+    versions: Vec<MinecraftVersion>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModrinthProject {
+    #[serde(rename = "projectId", alias = "project_id")]
+    project_id: String,
+    title: String,
+    description: String,
+    #[serde(rename = "iconUrl", alias = "icon_url")]
+    icon_url: Option<String>,
+    downloads: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModrinthSearchResponse {
+    hits: Vec<ModrinthProject>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModrinthVersion {
+    files: Vec<ModrinthFile>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModrinthFile {
+    hashes: HashMap<String, String>,
+    url: String,
+    filename: String,
+    primary: bool,
+    size: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdoptiumAsset {
+    binary: AdoptiumBinary,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdoptiumBinary {
+    package: AdoptiumPackage,
+}
+
+#[derive(Debug, Deserialize)]
+struct AdoptiumPackage {
+    checksum: String,
+    link: String,
+    name: String,
+    size: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,6 +258,168 @@ fn detect_java_runtimes() -> Vec<JavaRuntime> {
     runtimes
 }
 
+fn http_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .user_agent("RuinClient/0.1.0 (contact: sykiiplayz@gmail.com)")
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(600))
+        .build()
+        .map_err(|error| format!("Unable to initialize secure HTTP client: {error}"))
+}
+
+fn java_major(version: &str) -> Option<u32> {
+    let cleaned = version
+        .trim_start_matches("openjdk version ")
+        .trim_matches('"');
+    let mut parts = cleaned.split(['.', '_']);
+    let first = parts.next()?.parse::<u32>().ok()?;
+    if first == 1 {
+        parts.next()?.parse::<u32>().ok()
+    } else {
+        Some(first)
+    }
+}
+
+fn required_java_major(minecraft_version: &str) -> u32 {
+    let release = minecraft_version
+        .split('-')
+        .next()
+        .unwrap_or(minecraft_version);
+    let parts = release
+        .split('.')
+        .filter_map(|part| part.parse::<u32>().ok())
+        .collect::<Vec<_>>();
+
+    if parts.first().copied().unwrap_or_default() > 1 {
+        return 21;
+    }
+
+    let minor = parts.get(1).copied().unwrap_or_default();
+    let patch = parts.get(2).copied().unwrap_or_default();
+    if minor > 20 || (minor == 20 && patch >= 5) {
+        21
+    } else if minor >= 18 {
+        17
+    } else if minor == 17 {
+        16
+    } else {
+        8
+    }
+}
+
+fn compatible_java_runtime(path: &Path, required_major: u32, source: &str) -> Option<JavaRuntime> {
+    let version = java_version(path)?;
+    if java_major(&version)? < required_major {
+        return None;
+    }
+
+    Some(JavaRuntime {
+        path: path.to_string_lossy().into_owned(),
+        version,
+        source: source.to_string(),
+    })
+}
+
+fn find_java_executable(directory: &Path) -> Option<PathBuf> {
+    let executable = if cfg!(target_os = "windows") {
+        "java.exe"
+    } else {
+        "java"
+    };
+    let mut directories = vec![(directory.to_path_buf(), 0_u8)];
+
+    while let Some((current, depth)) = directories.pop() {
+        if depth > 5 {
+            continue;
+        }
+        for entry in fs::read_dir(current).ok()?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                directories.push((path, depth + 1));
+            } else if path.file_name().and_then(|name| name.to_str()) == Some(executable)
+                && path
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str())
+                    == Some("bin")
+            {
+                return Some(path);
+            }
+        }
+    }
+
+    None
+}
+
+fn download_to_file(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    destination: &Path,
+    expected_size: u64,
+) -> Result<String, String> {
+    let mut response = client
+        .get(url)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(|error| format!("Download failed: {error}"))?;
+    let mut file = File::create(destination)
+        .map_err(|error| format!("Unable to create {}: {error}", destination.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut downloaded = 0_u64;
+
+    loop {
+        let count = response
+            .read(&mut buffer)
+            .map_err(|error| format!("Unable to read download: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        downloaded = downloaded.saturating_add(count as u64);
+        if downloaded > expected_size {
+            return Err("Java runtime download exceeded its declared size.".to_string());
+        }
+        file.write_all(&buffer[..count])
+            .map_err(|error| format!("Unable to write download: {error}"))?;
+        hasher.update(&buffer[..count]);
+    }
+    if downloaded != expected_size {
+        return Err("Java runtime download was incomplete.".to_string());
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn extract_java_archive(archive: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination)
+        .map_err(|error| format!("Unable to create runtime directory: {error}"))?;
+
+    let status = if cfg!(target_os = "windows") {
+        Command::new("powershell")
+            .args(["-NoProfile", "-Command", "Expand-Archive"])
+            .arg("-LiteralPath")
+            .arg(archive)
+            .arg("-DestinationPath")
+            .arg(destination)
+            .arg("-Force")
+            .status()
+    } else {
+        Command::new("tar")
+            .arg("-xzf")
+            .arg(archive)
+            .arg("-C")
+            .arg(destination)
+            .status()
+    }
+    .map_err(|error| format!("Unable to start Java archive extraction: {error}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Java archive extraction failed.".to_string())
+    }
+}
+
 fn total_memory_mb() -> u64 {
     if cfg!(target_os = "linux") {
         return fs::read_to_string("/proc/meminfo")
@@ -246,6 +475,284 @@ fn get_environment() -> PlatformEnvironment {
         total_memory_mb: total_memory_mb(),
         java_runtimes: detect_java_runtimes(),
     }
+}
+
+#[tauri::command]
+fn fetch_minecraft_versions() -> Result<Vec<MinecraftVersion>, String> {
+    let manifest = http_client()?
+        .get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(|error| format!("Unable to load Minecraft versions: {error}"))?
+        .json::<MinecraftVersionManifest>()
+        .map_err(|error| format!("Invalid Minecraft version manifest: {error}"))?;
+
+    Ok(manifest.versions)
+}
+
+#[tauri::command]
+fn ensure_java_runtime(
+    app: AppHandle,
+    minecraft_version: String,
+    configured_java_path: String,
+) -> Result<JavaRuntime, String> {
+    let required_major = required_java_major(&minecraft_version);
+    let configured_path = PathBuf::from(configured_java_path);
+    if configured_path.is_file() {
+        if let Some(runtime) =
+            compatible_java_runtime(&configured_path, required_major, "Configured runtime")
+        {
+            return Ok(runtime);
+        }
+    }
+
+    if let Some(runtime) = detect_java_runtimes()
+        .into_iter()
+        .find(|runtime| java_major(&runtime.version).is_some_and(|major| major >= required_major))
+    {
+        return Ok(runtime);
+    }
+
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Unable to resolve app data directory: {error}"))?;
+    let runtime_root = app_data
+        .join("runtimes")
+        .join(format!("temurin-{required_major}"));
+    let current_directory = runtime_root.join("current");
+    if let Some(path) = find_java_executable(&current_directory) {
+        if let Some(runtime) =
+            compatible_java_runtime(&path, required_major, "Ruin managed runtime")
+        {
+            return Ok(runtime);
+        }
+    }
+
+    let operating_system = match env::consts::OS {
+        "windows" => "windows",
+        "macos" => "mac",
+        "linux" => "linux",
+        other => return Err(format!("Automatic Java setup is unavailable on {other}.")),
+    };
+    let architecture = match env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "aarch64",
+        other => {
+            return Err(format!(
+                "Automatic Java setup is unavailable for architecture {other}."
+            ))
+        }
+    };
+    let client = http_client()?;
+    let metadata_url = format!(
+        "https://api.adoptium.net/v3/assets/latest/{required_major}/hotspot?architecture={architecture}&image_type=jre&os={operating_system}&vendor=eclipse"
+    );
+    let asset = client
+        .get(metadata_url)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(|error| format!("Unable to locate a Java runtime: {error}"))?
+        .json::<Vec<AdoptiumAsset>>()
+        .map_err(|error| format!("Invalid Java runtime metadata: {error}"))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("No Temurin Java {required_major} runtime is available."))?;
+    let archive_name = Path::new(&asset.binary.package.name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| *name == asset.binary.package.name.as_str())
+        .ok_or_else(|| "Java provider returned an invalid archive name.".to_string())?;
+
+    fs::create_dir_all(&runtime_root)
+        .map_err(|error| format!("Unable to create runtime directory: {error}"))?;
+    let archive_path = runtime_root.join(archive_name);
+    let staging_directory = runtime_root.join("extracting");
+    if staging_directory.exists() {
+        fs::remove_dir_all(&staging_directory)
+            .map_err(|error| format!("Unable to reset runtime staging directory: {error}"))?;
+    }
+
+    let checksum = match download_to_file(
+        &client,
+        &asset.binary.package.link,
+        &archive_path,
+        asset.binary.package.size,
+    ) {
+        Ok(checksum) => checksum,
+        Err(error) => {
+            let _ = fs::remove_file(&archive_path);
+            return Err(error);
+        }
+    };
+    if !checksum.eq_ignore_ascii_case(&asset.binary.package.checksum) {
+        let _ = fs::remove_file(&archive_path);
+        return Err("Downloaded Java runtime failed SHA-256 verification.".to_string());
+    }
+
+    let extraction = extract_java_archive(&archive_path, &staging_directory);
+    let _ = fs::remove_file(&archive_path);
+    extraction?;
+    if current_directory.exists() {
+        fs::remove_dir_all(&current_directory)
+            .map_err(|error| format!("Unable to replace managed Java runtime: {error}"))?;
+    }
+    fs::rename(&staging_directory, &current_directory)
+        .map_err(|error| format!("Unable to activate managed Java runtime: {error}"))?;
+
+    let java_path = find_java_executable(&current_directory)
+        .ok_or_else(|| "The downloaded Java runtime has no Java executable.".to_string())?;
+    compatible_java_runtime(&java_path, required_major, "Ruin managed runtime")
+        .ok_or_else(|| "The downloaded Java runtime has an incompatible version.".to_string())
+}
+
+#[tauri::command]
+fn search_modrinth_mods(
+    query: String,
+    game_version: String,
+    loader: String,
+) -> Result<Vec<ModrinthProject>, String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    if loader == "Vanilla" {
+        return Err("Select a Fabric or Forge profile to browse mods.".to_string());
+    }
+
+    let facets = serde_json::json!([
+        ["project_type:mod"],
+        [format!("versions:{game_version}")],
+        [format!("categories:{}", loader.to_lowercase())]
+    ])
+    .to_string();
+    let parameters = [
+        ("query", query.to_string()),
+        ("limit", "20".to_string()),
+        ("facets", facets),
+    ];
+    let results = http_client()?
+        .get("https://api.modrinth.com/v2/search")
+        .query(&parameters)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(|error| format!("Modrinth search failed: {error}"))?
+        .json::<ModrinthSearchResponse>()
+        .map_err(|error| format!("Invalid Modrinth response: {error}"))?;
+
+    Ok(results.hits)
+}
+
+#[tauri::command]
+fn install_modrinth_mod(
+    project_id: String,
+    game_version: String,
+    loader: String,
+    game_directory: String,
+) -> Result<LocalModFile, String> {
+    if loader == "Vanilla" {
+        return Err("Mods require a Fabric or Forge profile.".to_string());
+    }
+    if !project_id
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err("Invalid Modrinth project identifier.".to_string());
+    }
+    if game_directory.trim().is_empty() {
+        return Err("Choose a Minecraft game directory before installing mods.".to_string());
+    }
+
+    let loaders = serde_json::json!([loader.to_lowercase()]).to_string();
+    let game_versions = serde_json::json!([game_version]).to_string();
+    let parameters = [("loaders", loaders), ("game_versions", game_versions)];
+    let versions_url = format!("https://api.modrinth.com/v2/project/{project_id}/version");
+    let versions = http_client()?
+        .get(versions_url)
+        .query(&parameters)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(|error| format!("Unable to resolve a compatible mod version: {error}"))?
+        .json::<Vec<ModrinthVersion>>()
+        .map_err(|error| format!("Invalid Modrinth version response: {error}"))?;
+    let version = versions
+        .first()
+        .ok_or_else(|| "No compatible Modrinth version was found.".to_string())?;
+    let file = version
+        .files
+        .iter()
+        .find(|file| file.primary)
+        .or_else(|| version.files.first())
+        .ok_or_else(|| "The selected Modrinth version has no downloadable file.".to_string())?;
+    let safe_filename = Path::new(&file.filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| *name == file.filename.as_str() && name.to_lowercase().ends_with(".jar"))
+        .ok_or_else(|| "Modrinth returned an invalid mod filename.".to_string())?;
+    let expected_checksum = file
+        .hashes
+        .get("sha512")
+        .ok_or_else(|| "Modrinth did not provide a SHA-512 checksum.".to_string())?;
+
+    let mods_directory = PathBuf::from(game_directory).join("mods");
+    fs::create_dir_all(&mods_directory)
+        .map_err(|error| format!("Unable to create mods directory: {error}"))?;
+    let destination = mods_directory.join(safe_filename);
+    let temporary = mods_directory.join(format!("{safe_filename}.part"));
+    let mut response = http_client()?
+        .get(&file.url)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(|error| format!("Mod download failed: {error}"))?;
+    let mut output = File::create(&temporary)
+        .map_err(|error| format!("Unable to create mod download: {error}"))?;
+    let mut hasher = Sha512::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut downloaded = 0_u64;
+    loop {
+        let count = response
+            .read(&mut buffer)
+            .map_err(|error| format!("Unable to read mod download: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        downloaded = downloaded.saturating_add(count as u64);
+        if downloaded > file.size {
+            drop(output);
+            let _ = fs::remove_file(&temporary);
+            return Err("Mod download exceeded its declared size.".to_string());
+        }
+        output
+            .write_all(&buffer[..count])
+            .map_err(|error| format!("Unable to save mod download: {error}"))?;
+        hasher.update(&buffer[..count]);
+    }
+    if downloaded != file.size {
+        drop(output);
+        let _ = fs::remove_file(&temporary);
+        return Err("Mod download was incomplete.".to_string());
+    }
+    output
+        .flush()
+        .map_err(|error| format!("Unable to finish mod download: {error}"))?;
+    drop(output);
+    let checksum = format!("{:x}", hasher.finalize());
+    if !checksum.eq_ignore_ascii_case(expected_checksum) {
+        let _ = fs::remove_file(&temporary);
+        return Err("Downloaded mod failed SHA-512 verification.".to_string());
+    }
+    if destination.exists() {
+        fs::remove_file(&destination)
+            .map_err(|error| format!("Unable to replace installed mod: {error}"))?;
+    }
+    fs::rename(&temporary, &destination)
+        .map_err(|error| format!("Unable to install mod: {error}"))?;
+
+    Ok(LocalModFile {
+        name: safe_filename.to_string(),
+        path: destination.to_string_lossy().into_owned(),
+        size_kb: file.size.div_ceil(1024),
+    })
 }
 
 #[tauri::command]
@@ -380,9 +887,37 @@ pub fn run() {
             load_state,
             save_state,
             get_environment,
+            fetch_minecraft_versions,
+            ensure_java_runtime,
+            search_modrinth_mods,
+            install_modrinth_mod,
             scan_local_mods,
             run_preflight
         ])
         .run(tauri::generate_context!())
         .expect("error while running Ruin Client");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selects_java_for_minecraft_generation() {
+        assert_eq!(required_java_major("1.16.5"), 8);
+        assert_eq!(required_java_major("1.17.1"), 16);
+        assert_eq!(required_java_major("1.20.4"), 17);
+        assert_eq!(required_java_major("1.20.5"), 21);
+        assert_eq!(required_java_major("26.2"), 21);
+    }
+
+    #[test]
+    fn parses_modrinth_api_field_names() {
+        let response = serde_json::from_str::<ModrinthSearchResponse>(
+            r#"{"hits":[{"project_id":"AANobbMI","title":"Sodium","description":"Fast","icon_url":null,"downloads":42}]}"#,
+        )
+        .expect("valid Modrinth response");
+
+        assert_eq!(response.hits[0].project_id, "AANobbMI");
+    }
 }

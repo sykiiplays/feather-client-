@@ -66,6 +66,20 @@ export interface LocalModFile {
   sizeKb: number
 }
 
+export interface MinecraftVersion {
+  id: string
+  versionType: 'release' | 'snapshot' | 'old_beta' | 'old_alpha'
+  releaseTime: string
+}
+
+export interface ModrinthProject {
+  projectId: string
+  title: string
+  description: string
+  iconUrl: string | null
+  downloads: number
+}
+
 export interface PlatformEnvironment {
   platform: string
   defaultGameDirectory: string

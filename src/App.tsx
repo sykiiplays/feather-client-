@@ -38,17 +38,23 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { initialState, releaseNotes } from './data'
 import {
+  ensureJavaRuntime,
+  fetchMinecraftVersions,
   getEnvironment,
+  installModrinthMod,
   loadState,
   runPreflight,
   saveState,
   scanLocalMods,
+  searchModrinthMods,
 } from './lib/native'
 import type {
   LauncherProfile,
   LauncherSettings,
   LauncherState,
   Loader,
+  MinecraftVersion,
+  ModrinthProject,
   Page,
   PlatformEnvironment,
   PreflightReport,
@@ -105,10 +111,18 @@ function App() {
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [accountModalOpen, setAccountModalOpen] = useState(false)
   const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [modrinthModalOpen, setModrinthModalOpen] = useState(false)
   const [preflight, setPreflight] = useState<PreflightReport | null>(null)
   const [launching, setLaunching] = useState(false)
+  const [minecraftVersions, setMinecraftVersions] = useState<
+    MinecraftVersion[]
+  >([])
   const [modSearch, setModSearch] = useState('')
   const [modFilter, setModFilter] = useState('All')
+  const [modrinthQuery, setModrinthQuery] = useState('performance')
+  const [modrinthResults, setModrinthResults] = useState<ModrinthProject[]>([])
+  const [modrinthLoading, setModrinthLoading] = useState(false)
+  const [installingMod, setInstallingMod] = useState('')
   const [toast, setToast] = useState('')
   const [profileDraft, setProfileDraft] = useState({
     name: 'New profile',
@@ -121,9 +135,10 @@ function App() {
     let cancelled = false
 
     async function hydrate() {
-      const [stored, platform] = await Promise.all([
+      const [stored, platform, versions] = await Promise.all([
         loadState().catch(() => null),
         getEnvironment().catch(() => emptyEnvironment),
+        fetchMinecraftVersions().catch(() => []),
       ])
 
       if (cancelled) return
@@ -138,6 +153,7 @@ function App() {
 
       setLauncherState(merged)
       setEnvironment(platform)
+      setMinecraftVersions(versions)
       setReady(true)
     }
 
@@ -218,9 +234,18 @@ function App() {
     if (!activeProfile) return
     setLaunching(true)
     try {
+      const runtime = await ensureJavaRuntime(
+        activeProfile.version,
+        launcherState.settings.javaPath,
+      )
+      const settings = {
+        ...launcherState.settings,
+        javaPath: runtime.path,
+      }
+      updateSettings('javaPath', runtime.path)
       const report = await runPreflight(
         activeProfile,
-        launcherState.settings,
+        settings,
         launcherState.account.connected,
       )
       setPreflight(report)
@@ -239,11 +264,7 @@ function App() {
       version: profileDraft.version.trim() || '1.21.5',
       loader: profileDraft.loader,
       loaderVersion:
-        profileDraft.loader === 'Fabric'
-          ? '0.16.14'
-          : profileDraft.loader === 'Forge'
-            ? '47.4.0'
-            : '',
+        profileDraft.loader === 'Vanilla' ? '' : 'Auto',
       memoryMb: launcherState.settings.memoryMb,
       icon: profileDraft.name.trim().slice(0, 2).toUpperCase() || 'NP',
       color: '#f97316',
@@ -320,6 +341,58 @@ function App() {
       notify(`${files.length} local mod${files.length === 1 ? '' : 's'} found`)
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  async function searchModrinth() {
+    if (!activeProfile) return
+    setModrinthLoading(true)
+    try {
+      const results = await searchModrinthMods(
+        modrinthQuery,
+        activeProfile.version,
+        activeProfile.loader,
+      )
+      setModrinthResults(results)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error))
+    } finally {
+      setModrinthLoading(false)
+    }
+  }
+
+  async function installFromModrinth(project: ModrinthProject) {
+    if (!activeProfile) return
+    setInstallingMod(project.projectId)
+    try {
+      const file = await installModrinthMod(
+        project.projectId,
+        activeProfile.version,
+        activeProfile.loader,
+        launcherState.settings.gameDirectory,
+      )
+      setLauncherState((current) => ({
+        ...current,
+        mods: [
+          ...current.mods.filter(
+            (mod) => mod.id !== `modrinth-${project.projectId}`,
+          ),
+          {
+            id: `modrinth-${project.projectId}`,
+            name: project.title,
+            description: `${file.sizeKb} KB · ${file.path}`,
+            category: 'Utility',
+            version: activeProfile.version,
+            enabled: true,
+            builtIn: false,
+          },
+        ],
+      }))
+      notify(`${project.title} installed from Modrinth`)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error))
+    } finally {
+      setInstallingMod('')
     }
   }
 
@@ -466,6 +539,7 @@ function App() {
               setFilter={setModFilter}
               toggleMod={toggleMod}
               scanMods={scanMods}
+              browseModrinth={() => setModrinthModalOpen(true)}
             />
           )}
 
@@ -547,6 +621,7 @@ function App() {
             <label>
               Minecraft version
               <input
+                list="minecraft-version-catalog"
                 value={profileDraft.version}
                 onChange={(event) =>
                   setProfileDraft((draft) => ({
@@ -555,6 +630,24 @@ function App() {
                   }))
                 }
               />
+              <datalist id="minecraft-version-catalog">
+                {minecraftVersions
+                  .filter(
+                    (version) =>
+                      launcherState.settings.showSnapshots ||
+                      version.versionType !== 'snapshot',
+                  )
+                  .map((version) => (
+                    <option key={version.id} value={version.id}>
+                      {version.versionType.replace('_', ' ')}
+                    </option>
+                  ))}
+              </datalist>
+              <small>
+                {minecraftVersions.length > 0
+                  ? `${minecraftVersions.length} official Mojang versions loaded`
+                  : 'Enter a Minecraft version'}
+              </small>
             </label>
             <label>
               Mod loader
@@ -576,6 +669,82 @@ function App() {
               <Plus size={17} />
               Create profile
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {modrinthModalOpen && (
+        <Modal
+          title="Browse Modrinth"
+          subtitle={`${activeProfile.version} · ${activeProfile.loader}`}
+          close={() => setModrinthModalOpen(false)}
+        >
+          <div className="modrinth-browser">
+            <form
+              className="modrinth-search"
+              onSubmit={(event) => {
+                event.preventDefault()
+                void searchModrinth()
+              }}
+            >
+              <label className="search-box">
+                <Search size={17} />
+                <input
+                  autoFocus
+                  value={modrinthQuery}
+                  placeholder="Search compatible mods"
+                  onChange={(event) => setModrinthQuery(event.target.value)}
+                />
+              </label>
+              <button
+                className="primary"
+                type="submit"
+                disabled={modrinthLoading}
+              >
+                <Search size={16} />
+                {modrinthLoading ? 'Searching…' : 'Search'}
+              </button>
+            </form>
+            <div className="modrinth-results">
+              {modrinthResults.map((project) => (
+                <article className="modrinth-result" key={project.projectId}>
+                  {project.iconUrl ? (
+                    <img src={project.iconUrl} alt="" />
+                  ) : (
+                    <span className="modrinth-placeholder">
+                      <PackagePlus size={20} />
+                    </span>
+                  )}
+                  <div>
+                    <strong>{project.title}</strong>
+                    <p>{project.description}</p>
+                    <small>
+                      {Intl.NumberFormat('en', {
+                        notation: 'compact',
+                      }).format(project.downloads)}{' '}
+                      downloads
+                    </small>
+                  </div>
+                  <button
+                    className="secondary"
+                    disabled={Boolean(installingMod)}
+                    onClick={() => void installFromModrinth(project)}
+                  >
+                    <Download size={15} />
+                    {installingMod === project.projectId
+                      ? 'Installing…'
+                      : 'Install'}
+                  </button>
+                </article>
+              ))}
+              {!modrinthLoading && modrinthResults.length === 0 && (
+                <div className="empty-state compact">
+                  <PackagePlus size={26} />
+                  <h3>Find profile-compatible mods</h3>
+                  <p>Search Modrinth and install verified files in one click.</p>
+                </div>
+              )}
+            </div>
           </div>
         </Modal>
       )}
@@ -754,7 +923,7 @@ function HomePage({
               <Play size={20} fill="currentColor" />
             )}
             <span>
-              <strong>{launching ? 'CHECKING…' : 'LAUNCH GAME'}</strong>
+              <strong>{launching ? 'PREPARING JAVA…' : 'LAUNCH GAME'}</strong>
               <small>{activeProfile.version}</small>
             </span>
           </button>
@@ -958,6 +1127,7 @@ interface ModsPageProps {
   setFilter: (value: string) => void
   toggleMod: (id: string) => void
   scanMods: () => Promise<void>
+  browseModrinth: () => void
 }
 
 function ModsPage({
@@ -969,6 +1139,7 @@ function ModsPage({
   setFilter,
   toggleMod,
   scanMods,
+  browseModrinth,
 }: ModsPageProps) {
   return (
     <section className="content-page">
@@ -980,13 +1151,16 @@ function ModsPage({
             Toggle built-in modules and prepare profile-specific mod folders.
           </span>
         </div>
-        <button
-          className="primary"
-          onClick={() => void scanMods()}
-        >
-          <Download size={17} />
-          Scan local mods
-        </button>
+        <div className="heading-actions">
+          <button className="secondary" onClick={() => void scanMods()}>
+            <FolderOpen size={17} />
+            Scan local mods
+          </button>
+          <button className="primary" onClick={browseModrinth}>
+            <Download size={17} />
+            Browse Modrinth
+          </button>
+        </div>
       </div>
       <div className="mods-toolbar">
         <label className="search-box">

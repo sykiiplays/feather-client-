@@ -10,6 +10,9 @@ A lightweight, local-first desktop launcher foundation for Minecraft Java Editio
 - Fabric, Forge, and vanilla launch profiles
 - Persistent profile, mod, account, and launcher settings
 - Java runtime and system-memory detection
+- Automatic Eclipse Temurin runtime provisioning with SHA-256 verification
+- Complete official Mojang version catalog, including snapshots and legacy builds
+- Modrinth search and compatible `.jar` installation with SHA-512 verification
 - Native `.jar` scanning from the selected `mods` folder
 - Built-in module toggles for the future in-game client layer
 - Dark and light themes with a responsive desktop UI
@@ -19,11 +22,11 @@ A lightweight, local-first desktop launcher foundation for Minecraft Java Editio
 
 ## MVP boundary
 
-The current launch button runs a real native preflight and produces the launch-engine handoff. It does **not** yet download Mojang manifests, install Fabric/Forge, complete Microsoft/Xbox/Minecraft token exchange, or start the Minecraft JVM. Those production services are intentionally separate because they require:
+The current launch button provisions a compatible Java runtime when needed, loads Mojang's official version catalog, runs native preflight, and produces the launch-engine handoff. It does **not** yet download Minecraft game assets/libraries, install Fabric/Forge loaders, complete Microsoft/Xbox/Minecraft token exchange, or start the Minecraft JVM. Those production services are intentionally separate because they require:
 
 1. An Azure application registration and approved redirect URI
 2. Secure refresh-token storage through each operating system keychain
-3. Mojang version-manifest, asset, library, and native installers
+3. Mojang asset, library, and native installers
 4. Fabric/Forge metadata adapters with checksum verification
 5. Minecraft ownership and profile verification
 
@@ -76,7 +79,7 @@ src/
   lib/native.ts    typed browser/Tauri integration boundary
   types.ts         shared frontend domain models
 src-tauri/
-  src/lib.rs       persistence, Java detection, mod scanning, preflight
+  src/lib.rs       persistence, Java provisioning, Mojang/Modrinth APIs, preflight
   tauri.conf.json  desktop window, bundle, and CSP configuration
 ```
 
@@ -86,10 +89,10 @@ Launcher state is saved to the Tauri application-data directory as `launcher-sta
 
 - Microsoft, Xbox Live, XSTS, and Minecraft Services OAuth chain
 - OS-keychain token storage and account switching
-- Mojang manifest installer with SHA-1 verification
+- Mojang game-file installer with SHA-1 verification
 - Fabric and Forge installer adapters
 - Real launch command construction and process telemetry
-- Profile-specific directories, mod importing, and update checks
+- Profile-specific directories and mod update checks
 - Signed platform installers and auto-updates
 - Separate Fabric client module implementing HUD features in-game
 
@@ -98,5 +101,6 @@ Launcher state is saved to the Tauri application-data directory as `launcher-sta
 - Never collect a Microsoft password inside the launcher.
 - Never log access or refresh tokens.
 - Verify every downloaded game file against Mojang or loader metadata.
+- Verify managed Java and Modrinth downloads before installation.
 - Keep launcher commands argument-based; do not invoke a shell with user input.
 - Do not redistribute Minecraft files or bypass ownership checks.

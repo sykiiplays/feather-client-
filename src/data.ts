@@ -144,9 +144,9 @@ export const releaseNotes = [
   },
   {
     tag: 'MODS',
-    title: 'One place for every profile',
+    title: 'Modrinth built in',
     description:
-      'Keep Fabric, Forge, and vanilla configurations separate and predictable.',
+      'Find compatible Fabric and Forge mods, verify them, and install in one click.',
     date: 'MVP 0.1',
     accent: 'cyan',
   },
