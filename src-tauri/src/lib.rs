@@ -351,14 +351,19 @@ fn run_preflight(
     ];
     let ready = checks.iter().all(|item| item.passed);
     let loader = if profile.loader == "Vanilla" {
-        String::new()
+        "none"
     } else {
-        format!(" --loader {}", profile.loader.to_lowercase())
+        profile.loader.as_str()
     };
     let arguments = settings.launch_arguments.trim();
     let command_preview = format!(
-        "\"{}\" -Xmx{}M {} … --version {}{} --profile \"{}\"",
-        settings.java_path, settings.memory_mb, arguments, profile.version, loader, profile.name
+        "java={} maximumMemoryMb={} customJvmArguments={} version={} loader={} profile={}",
+        serde_json::to_string(&settings.java_path).unwrap_or_else(|_| "\"\"".to_string()),
+        settings.memory_mb,
+        serde_json::to_string(arguments).unwrap_or_else(|_| "\"\"".to_string()),
+        serde_json::to_string(&profile.version).unwrap_or_else(|_| "\"\"".to_string()),
+        serde_json::to_string(loader).unwrap_or_else(|_| "\"\"".to_string()),
+        serde_json::to_string(&profile.name).unwrap_or_else(|_| "\"\"".to_string())
     );
 
     PreflightReport {
@@ -379,5 +384,5 @@ pub fn run() {
             run_preflight
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Feather Client");
+        .expect("error while running Ruin Client");
 }

@@ -1,16 +1,16 @@
 import type { LauncherState } from './types'
 
 export const initialState: LauncherState = {
-  activeProfileId: 'feather-performance',
+  activeProfileId: 'ruin-performance',
   profiles: [
     {
-      id: 'feather-performance',
-      name: 'Feather Performance',
+      id: 'ruin-performance',
+      name: 'Ruin Performance',
       version: '1.21.5',
       loader: 'Fabric',
       loaderVersion: '0.16.14',
       memoryMb: 4096,
-      icon: 'FP',
+      icon: 'RP',
       color: '#8b5cf6',
       lastPlayed: 'Today',
     },

@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Feather Client",
+  "productName": "Ruin Client",
   "version": "0.1.0",
-  "identifier": "gg.feather.client.mvp",
+  "identifier": "gg.ruin.client.mvp",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Feather Client",
+        "title": "Ruin Client",
         "width": 1280,
         "height": 780,
         "minWidth": 980,

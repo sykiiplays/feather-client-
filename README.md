@@ -1,8 +1,8 @@
-# Feather Client launcher MVP
+# Ruin Client launcher MVP
 
 A lightweight, local-first desktop launcher foundation for Minecraft Java Edition. The app uses React for the interface and Tauri/Rust for native system integration.
 
-> This is an unofficial engineering MVP and is not affiliated with Mojang, Microsoft, Feather Client, or Dawn Client. It requires a licensed Minecraft account. It does not include Minecraft assets, proprietary client code, cracked authentication, or account bypasses.
+> This is an unofficial engineering MVP and is not affiliated with Mojang or Microsoft. It requires a licensed Minecraft account. It does not include Minecraft assets, proprietary client code, cracked authentication, or account bypasses.
 
 ## Included
 

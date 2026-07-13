@@ -1,5 +1,5 @@
 [package]
-name = "feather-client"
+name = "ruin-client"
 version = "0.1.0"
 description = "A lightweight cross-platform Minecraft Java launcher MVP"
 authors = ["Sykii Playz"]
@@ -10,7 +10,7 @@ rust-version = "1.88.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "feather_client_lib"
+name = "ruin_client_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

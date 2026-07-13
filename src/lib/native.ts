@@ -8,7 +8,7 @@ import type {
   PreflightReport,
 } from '../types'
 
-const STORAGE_KEY = 'feather-client-state-v1'
+const STORAGE_KEY = 'ruin-client-state-v1'
 
 function isTauri(): boolean {
   return '__TAURI_INTERNALS__' in window
@@ -92,7 +92,14 @@ export async function runPreflight(
 
   return {
     ready: checks.every((check) => check.passed),
-    commandPreview: `${settings.javaPath || 'java'} -Xmx${profile.memoryMb}M …`,
+    commandPreview: JSON.stringify({
+      java: settings.javaPath || 'java',
+      maximumMemoryMb: profile.memoryMb,
+      customJvmArguments: settings.launchArguments,
+      version: profile.version,
+      loader: profile.loader,
+      profile: profile.name,
+    }),
     checks,
   }
 }

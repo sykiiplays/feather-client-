@@ -10,7 +10,6 @@ import {
   Cog,
   Cpu,
   Download,
-  Feather,
   FolderOpen,
   Gamepad2,
   Gauge,
@@ -70,13 +69,23 @@ const emptyEnvironment: PlatformEnvironment = {
 }
 
 function mergeState(stored: LauncherState | null): LauncherState {
-  if (!stored) return initialState
+  const defaults: LauncherState = {
+    ...initialState,
+    profiles: initialState.profiles.map((profile) => ({ ...profile })),
+    mods: initialState.mods.map((mod) => ({ ...mod })),
+    settings: { ...initialState.settings },
+    account: { ...initialState.account },
+  }
+
+  if (!stored) return defaults
 
   return {
-    ...initialState,
+    ...defaults,
     ...stored,
-    settings: { ...initialState.settings, ...stored.settings },
-    account: { ...initialState.account, ...stored.account },
+    profiles: stored.profiles.map((profile) => ({ ...profile })),
+    mods: stored.mods.map((mod) => ({ ...mod })),
+    settings: { ...defaults.settings, ...stored.settings },
+    account: { ...defaults.account, ...stored.account },
   }
 }
 
@@ -87,8 +96,9 @@ function formatPlaytime(minutes: number): string {
 
 function App() {
   const [activePage, setActivePage] = useState<Page>('home')
-  const [launcherState, setLauncherState] =
-    useState<LauncherState>(initialState)
+  const [launcherState, setLauncherState] = useState<LauncherState>(() =>
+    mergeState(null),
+  )
   const [environment, setEnvironment] =
     useState<PlatformEnvironment>(emptyEnvironment)
   const [ready, setReady] = useState(false)
@@ -207,13 +217,18 @@ function App() {
   async function handleLaunch() {
     if (!activeProfile) return
     setLaunching(true)
-    const report = await runPreflight(
-      activeProfile,
-      launcherState.settings,
-      launcherState.account.connected,
-    )
-    setPreflight(report)
-    setLaunching(false)
+    try {
+      const report = await runPreflight(
+        activeProfile,
+        launcherState.settings,
+        launcherState.account.connected,
+      )
+      setPreflight(report)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : String(error))
+    } finally {
+      setLaunching(false)
+    }
   }
 
   function createProfile() {
@@ -315,10 +330,10 @@ function App() {
       <aside className="sidebar">
         <button className="brand" onClick={() => setActivePage('home')}>
           <span className="brand-mark">
-            <Feather size={22} strokeWidth={2.4} />
+            <Zap size={22} strokeWidth={2.4} />
           </span>
           <span>
-            <strong>Feather</strong>
+            <strong>Ruin</strong>
             <small>CLIENT</small>
           </span>
         </button>
@@ -366,7 +381,7 @@ function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">
-              {activePage === 'home' ? 'GOOD TO SEE YOU' : 'FEATHER CLIENT'}
+              {activePage === 'home' ? 'GOOD TO SEE YOU' : 'RUIN CLIENT'}
             </p>
             <h1>
               {activePage === 'home'
@@ -611,7 +626,7 @@ function App() {
               ))}
             </div>
             <div className="command-preview">
-              <span>COMMAND PREVIEW</span>
+              <span>LAUNCH PLAN</span>
               <code>{preflight.commandPreview}</code>
             </div>
             <button
@@ -780,7 +795,7 @@ function HomePage({
       <div className="section-heading">
         <div>
           <span>WHAT’S NEW</span>
-          <h3>Inside Feather</h3>
+          <h3>Inside Ruin</h3>
         </div>
         <button onClick={() => setActivePage('mods')}>
           Explore mods <ChevronRight size={15} />
@@ -1057,6 +1072,11 @@ function SettingsPage({
   updateSettings,
   detectJava,
 }: SettingsPageProps) {
+  const maximumMemoryMb = Math.max(
+    8192,
+    Math.floor((environment.totalMemoryMb - 2048) / 1024) * 1024,
+  )
+
   return (
     <section className="content-page settings-page">
       <div className="page-heading">
@@ -1110,13 +1130,13 @@ function SettingsPage({
           <div className="range-heading">
             <span>2 GB</span>
             <strong>{settings.memoryMb / 1024} GB</strong>
-            <span>{Math.max(8, environment.totalMemoryMb / 1024)} GB</span>
+            <span>{maximumMemoryMb / 1024} GB</span>
           </div>
           <input
             className="range"
             type="range"
             min="2048"
-            max={Math.max(8192, environment.totalMemoryMb - 2048)}
+            max={maximumMemoryMb}
             step="1024"
             value={settings.memoryMb}
             onChange={(event) =>

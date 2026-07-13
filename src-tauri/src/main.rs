@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    feather_client_lib::run();
+    ruin_client_lib::run();
 }
